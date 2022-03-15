@@ -1,0 +1,68 @@
+version: 2.1
+
+##################
+# Orbs
+##################
+orbs:
+  gcp-cloud-run: circleci/gcp-cloud-run@1.0.2
+  gcp-gcr: circleci/gcp-gcr@0.14.1
+
+##################
+# Workflows
+##################
+workflows:
+  build_test_deploy:
+    jobs:
+      - build_test
+      - build_and_deploy:
+          requires:
+            - build_test
+
+##################
+# Jobs
+##################
+jobs:
+  build_test:
+    docker:
+      - image: circleci/python:3.6.2-stretch-browsers
+    steps:
+      - checkout
+      - run:
+          name: Download Selenium
+          command: |
+            curl -O http://selenium-release.storage.googleapis.com/3.5/selenium-server-standalone-3.5.3.jar
+      - run:
+          name: Start Selenium in background
+          command: |
+            java -jar selenium-server-standalone-3.5.3.jar -log selenium.log
+          background: true
+      - restore_cache:
+          key: deps2-{{ checksum "requirements/dev.txt" }}
+      - run:
+          command: |
+            python3 -m venv venv
+            . venv/bin/activate
+            pip install -r requirements/dev.txt
+      - save_cache:
+          key: deps2-{{ checksum "requirements/dev.txt" }}
+          paths:
+            - 'venv'
+      - run:
+          command: |
+            . venv/bin/activate
+            python manage.py test
+
+  build_and_deploy:
+    docker:
+      - image: circleci/python:3.6.2-stretch-browsers
+    steps:
+      - checkout
+      - gcp-cloud-run/init
+      - gcp-cloud-run/build:
+          tag: 'gcr.io/${GOOGLE_PROJECT_ID}/test-${CIRCLE_SHA1}'
+      - gcp-cloud-run/deploy:
+          image: 'gcr.io/${GOOGLE_PROJECT_ID}/test-${CIRCLE_SHA1}'
+          platform: managed
+          region: $GOOGLE_COMPUTE_ZONE
+          service-name: "jake-circleci"
+          unauthenticated: true
